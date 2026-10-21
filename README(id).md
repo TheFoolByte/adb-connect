@@ -19,6 +19,14 @@ GUI Controller desktop berbasis PyQt6 untuk menghubungkan perangkat Android ke P
 
 ---
 
+## 📦 Windows Installer & Release
+
+Untuk pengguna Windows, installer otomatis tersedia di menu [GitHub Releases](https://github.com/TheFoolByte/adb-connect/releases):
+- `ADBConnect-Installer-x64.exe` (Setup wizard otomatis terdaftar di Start Menu & Control Panel).
+- `ADBConnect-Portable-x64.zip` (Versi standalone tanpa install).
+
+---
+
 ## 📋 Kebutuhan Sistem
 
 - Python 3.10+

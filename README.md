@@ -19,6 +19,14 @@ A modern PyQt6 desktop GUI controller to connect Android devices to PC via USB o
 
 ---
 
+## 📦 Windows Installer & Releases
+
+Windows users can download automated binary packages directly from [GitHub Releases](https://github.com/TheFoolByte/adb-connect/releases):
+- `ADBConnect-Installer-x64.exe` (Standard setup wizard registering in Start Menu & Control Panel).
+- `ADBConnect-Portable-x64.zip` (Portable standalone zip).
+
+---
+
 ## 📋 Prerequisites
 
 - Python 3.10+

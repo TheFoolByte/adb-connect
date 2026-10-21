@@ -1,0 +1,90 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 pyinstaller
+
+      - name: Download Platform Tools & scrcpy for Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "bin" | Out-Null
+          
+          # Download Android Platform Tools (adb)
+          Write-Host "Downloading ADB..."
+          Invoke-WebRequest -Uri "https://dl.google.com/android/repository/platform-tools-latest-windows.zip" -OutFile "platform-tools.zip"
+          Expand-Archive -Path "platform-tools.zip" -DestinationPath "pt_temp"
+          Copy-Item "pt_temp\platform-tools\adb.exe" -Destination "bin\adb.exe"
+          Copy-Item "pt_temp\platform-tools\AdbWinApi.dll" -Destination "bin\AdbWinApi.dll"
+          Copy-Item "pt_temp\platform-tools\AdbWinUsbApi.dll" -Destination "bin\AdbWinUsbApi.dll"
+          Remove-Item -Recurse -Force "pt_temp", "platform-tools.zip"
+
+          # Download scrcpy release
+          Write-Host "Downloading scrcpy..."
+          $scrcpyRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/Genymobile/scrcpy/releases/latest"
+          $scrcpyAsset = $scrcpyRelease.assets | Where-Object { $_.name -match "scrcpy-win64.*\.zip" } | Select-Object -First 1
+          Invoke-WebRequest -Uri $scrcpyAsset.browser_download_url -OutFile "scrcpy.zip"
+          Expand-Archive -Path "scrcpy.zip" -DestinationPath "scrcpy_temp"
+          $scrcpyFolder = Get-ChildItem "scrcpy_temp" | Select-Object -First 1
+          Copy-Item "$($scrcpyFolder.FullName)\*" -Destination "bin\" -Recurse -Force
+          Remove-Item -Recurse -Force "scrcpy_temp", "scrcpy.zip"
+
+      - name: Build Executable with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onedir --windowed `
+            --name "ADBConnect" `
+            --add-data "bin;bin" `
+            adb_gui_qt.py
+
+      - name: Compile Inno Setup Installer
+        uses: MinCi/innosetup-action@v1.2.2
+        with:
+          filepath: installer.iss
+
+      - name: Create Portable Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\ADBConnect" -DestinationPath "dist\ADBConnect-Portable-x64.zip"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: adb-connect-windows-build
+          path: |
+            Output/ADBConnect-Installer-x64.exe
+            dist/ADBConnect-Portable-x64.zip
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Output/ADBConnect-Installer-x64.exe
+            dist/ADBConnect-Portable-x64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true

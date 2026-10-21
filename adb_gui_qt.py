@@ -18,6 +18,17 @@ from PyQt6.QtWidgets import (
     QFrame, QMessageBox
 )
 
+# Setup bundled binary directory (adb & scrcpy on Windows package)
+def get_base_dir():
+    if getattr(sys, 'frozen', False):
+        return getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_dir()
+BIN_DIR = os.path.join(BASE_DIR, "bin")
+if os.path.exists(BIN_DIR) and BIN_DIR not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = BIN_DIR + os.pathsep + os.environ.get("PATH", "")
+
 def run_cmd(cmd):
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
