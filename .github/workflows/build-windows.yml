@@ -60,10 +60,16 @@ jobs:
             --add-data "bin;bin" `
             adb_gui_qt.py
 
-      - name: Compile Inno Setup Installer
-        uses: MinCi/innosetup-action@v1.2.2
-        with:
-          filepath: installer.iss
+      - name: Install Inno Setup & Compile Installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $isccPath)) {
+            $isccPath = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+          }
+          Write-Host "Compiling installer using $isccPath..."
+          & $isccPath installer.iss
 
       - name: Create Portable Zip
         shell: pwsh
