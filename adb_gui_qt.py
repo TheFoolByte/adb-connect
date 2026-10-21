@@ -313,8 +313,7 @@ class ADBConnectApp(QMainWindow):
         """
         self.setStyleSheet(style)
 
-    def refresh_devices(self):
-        self.device_list.clear()
+    def get_connected_devices(self):
         code, out, _ = run_cmd("adb devices -l")
         devices = []
         for line in out.splitlines()[1:]:
@@ -326,55 +325,95 @@ class ADBConnectApp(QMainWindow):
                 serial = parts[0]
                 status = parts[1]
                 t = "WIFI" if ":" in serial else "USB"
-                devices.append((serial, t, status))
+                devices.append({"serial": serial, "type": t, "status": status})
+        return devices
+
+    def refresh_devices(self):
+        self.device_list.clear()
+        devices = self.get_connected_devices()
 
         if not devices:
             it = QListWidgetItem("Belum ada perangkat yang terhubung.")
             it.setFlags(Qt.ItemFlag.NoItemFlags)
             self.device_list.addItem(it)
         else:
-            for s, t, stat in devices:
-                it = QListWidgetItem(f"📱 {s}  [{t}]  •  {stat}")
+            for d in devices:
+                it = QListWidgetItem(f"📱 {d['serial']}  [{d['type']}]  •  {d['status']}")
                 self.device_list.addItem(it)
 
     def enable_tcpip(self):
+        devices = self.get_connected_devices()
+        usb_devices = [d["serial"] for d in devices if d["type"] == "USB" and d["status"] == "device"]
+
+        target_flag = f"-s {usb_devices[0]}" if usb_devices else ""
         self.status_bar.setText("Mengaktifkan port 5555 di HP...")
         self.btn_tcpip.setEnabled(False)
 
         def done(code, out, err, _):
             self.btn_tcpip.setEnabled(True)
-            if code == 0:
+            if code == 0 or "restarting in TCP mode" in (out + err):
                 self.status_bar.setText("✓ Port 5555 aktif! Kabel USB boleh dicabut.")
                 self.auto_detect_ip()
             else:
                 self.status_bar.setText(f"Gagal buka port: {err or out}")
 
-        self.worker = CommandWorker("tcpip", "adb tcpip 5555")
+        cmd = f"adb {target_flag} tcpip 5555".strip()
+        self.worker = CommandWorker("tcpip", cmd)
         self.worker.finished_signal.connect(done)
         self.worker.start()
 
     def auto_detect_ip(self):
         self.status_bar.setText("Mencari IP HP...")
-        code, out, _ = run_cmd("adb shell ip -f inet addr show wlan0")
+        devices = self.get_connected_devices()
+        # Prioritas scan via device USB jika ada, atau device aktif apa pun
+        target_serial = None
+        for d in devices:
+            if d["status"] == "device":
+                target_serial = d["serial"]
+                if d["type"] == "USB":
+                    break
+
+        adb_prefix = f"adb -s {target_serial}" if target_serial else "adb"
         ip = None
-        if code == 0:
-            m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
-            if m:
-                ip = m.group(1)
+
+        # 1. Cek semua interface wlan0, ap0 (hotspot/tethering), swlan0
+        for iface in ["wlan0", "ap0", "swlan0"]:
+            code, out, _ = run_cmd(f"{adb_prefix} shell ip -f inet addr show {iface}")
+            if code == 0:
+                m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", out)
+                if m and not m.group(1).startswith("127."):
+                    ip = m.group(1)
+                    break
+
+        # 2. Cek lewat ip route
         if not ip:
-            code, out, _ = run_cmd("adb shell ip route")
+            code, out, _ = run_cmd(f"{adb_prefix} shell ip route")
             if code == 0:
                 for line in out.splitlines():
-                    if "wlan0" in line or "link" in line:
-                        m = re.search(r"(\d+\.\d+\.\d+\.\d+)", line)
-                        if m:
+                    if any(k in line for k in ["wlan0", "ap0", "link", "dev"]):
+                        m = re.search(r"src\s+(\d+\.\d+\.\d+\.\d+)", line)
+                        if not m:
+                            m = re.search(r"(\d+\.\d+\.\d+\.\d+)", line)
+                        if m and not m.group(1).startswith("127.") and not m.group(1).endswith(".0"):
                             ip = m.group(1)
                             break
+
+        # 3. Fallback scan semua inet addr di device
+        if not ip:
+            code, out, _ = run_cmd(f"{adb_prefix} shell ip -o -4 addr show")
+            if code == 0:
+                for line in out.splitlines():
+                    if any(k in line for k in ["wlan", "ap", "rndis", "eth"]):
+                        m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+                        if m and not m.group(1).startswith("127."):
+                            ip = m.group(1)
+                            break
+
         if ip:
             self.input_ip.setText(ip)
             self.status_bar.setText(f"✓ IP HP ditemukan: {ip}")
         else:
-            self.status_bar.setText("IP tidak terdeteksi otomatis. Masukkan manual.")
+            self.status_bar.setText("IP tidak terdeteksi. Pastikan HP tersambung WiFi / Hotspot.")
 
     def connect_wifi(self):
         ip = self.input_ip.text().strip()
@@ -430,15 +469,36 @@ class ADBConnectApp(QMainWindow):
         return max(320, target_w), max(500, target_h)
 
     def launch_scrcpy(self, mode="usb"):
+        devices = self.get_connected_devices()
+        ip_input = self.input_ip.text().strip()
+
+        # Tentukan target flag spesifik agar tidak error "more than one device"
+        target = ""
+        if mode == "usb":
+            usb_devs = [d["serial"] for d in devices if d["type"] == "USB" and d["status"] == "device"]
+            if usb_devs:
+                target = f"-s {usb_devs[0]}"
+            else:
+                target = "-d"
+        else:
+            # Mode WiFi: cari perangkat WiFi yang terhubung atau pakai input IP
+            wifi_devs = [d["serial"] for d in devices if d["type"] == "WIFI" and d["status"] == "device"]
+            if ip_input and f"{ip_input}:5555" in wifi_devs:
+                target = f"-s {ip_input}:5555"
+            elif wifi_devs:
+                target = f"-s {wifi_devs[0]}"
+            elif ip_input:
+                target = f"-s {ip_input}:5555"
+            else:
+                target = "-e"
+
         target_w, target_h = self.calculate_adaptive_window_size()
         flags = f"--no-audio --turn-screen-off --window-width={target_w} --window-height={target_h}"
-        target = "-d" if mode == "usb" else "-e"
-        cmd = f"scrcpy {target} {flags}"
+        cmd = f"scrcpy {target} {flags}".strip()
 
         if sys.platform == "win32":
             subprocess.Popen(f"cmd /c start {cmd}", shell=True)
         else:
-            # Gunakan script launcher agar Hyprland meng-assign class scrcpy ke floating rule
             subprocess.Popen(f"nohup {cmd} >/dev/null 2>&1 &", shell=True)
 
         self.status_bar.setText(f"✓ Scrcpy {mode.upper()} dibuka ({target_w}x{target_h}px auto-scale).")
